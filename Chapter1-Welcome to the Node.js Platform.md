@@ -1,3 +1,343 @@
+# Welcom to the Node.js Platform
+## Node.js 的发展
+* 技术本身的发展
+* 庞大的`Node.js`生态圈的发展
+* 官方组织的维护
+
+## Node.js的特点
+
+### 小模块
+以`package`的形式尽可能多的复用模块，原则上每个模块的容量尽量小而精。
+
+原则：
+
+* "Small is beautiful" ---小而精
+* "Make each program do one thing well" ---单一职责原则
+
+因此，一个`Node.js`应用由多个包搭建而成，包管理器（`npm`）的管理使得他们相互依赖而不起冲突。
+
+如果设计一个`Node.js`的模块，尽可能做到以下三点：
+
+* 易于理解和使用
+* 易于测试和维护
+* 考虑到对客户端（浏览器）的支持更友好
+
+以及，`Don't Repeat Yourself(DRY)`复用性原则。
+
+### 以接口形式提供
+每个`Node.js`模块都是一个函数（类也是以构造函数的形式呈现），我们只需要调用相关`API`即可，而不需要知道其它模块的实现。`Node.js`模块是为了使用它们而创建，不仅仅是在拓展性上，更要考虑到维护性和可用性。
+
+### 简单且实用
+> “简单就是终极的复杂”  ————达尔文
+
+遵循`KISS(Keep It Simple, Stupid)原则`，即优秀的简洁的设计，能够更有效地传递信息。
+
+设计必须很简单，无论在实现还是接口上，更重要的是实现比接口更简单，简单是重要的设计原则。
+
+我们做一个设计简单，功能完备，而不是完美的软件：
+* 实现起来需要更少的努力
+* 允许用更少的速度进行更快的运输资源
+* 具有伸缩性，更易于维护和理解
+* 促进社区贡献，允许软件本身的成长和改进
+
+而对于`Node.js`而言，因为其支持`JavaScript`，简单和函数、闭包、对象等特性，可取代复杂的面向对象的类语法。如单例模式和装饰者模式，它们在面向对象的语言都需要很复杂的实现，而对于`JavaScript`则较为简单。
+
+## 介绍Node.js 6 和 ES2015的新语法
+### let和const关键字
+`ES5`之前，只有函数和全局作用域。
+
+```javascript
+if (false) {
+  var x = "hello";
+}
+
+console.log(x); // undefined
+```
+
+现在用`let`，创建词法作用域，则会报出一个错误`Uncaught ReferenceError: x is not defined`
+
+```javascript
+if (false) {
+  let x = "hello";
+}
+
+console.log(x);
+```
+
+在循环语句中使用`let`，也会报错`Uncaught ReferenceError: i is not defined`：
+
+```javascript
+for (let i = 0; i < 10; i++) {
+  // do something here
+}
+
+console.log(i);
+```
+
+使用`let`和`const`关键字，可以让代码更安全，如果意外的访问另一个作用域的变量，更容易发现错误。
+
+使用`const`关键字声明变量，变量不会被意外更改。
+
+```javascript
+const x = 'This will never change';
+x = '...';
+```
+
+这里会报出一个错误`Uncaught TypeError: Assignment to constant variable.`
+
+但是对于对象属性的更改，`const`显得毫无办法：
+
+```javascript
+const x = {};
+x.name = 'John';
+```
+上述代码并不会报错
+
+但是如果直接更改对象，还是会抛出一个错误。
+
+```javascript
+const x = {};
+x = null;
+```
+
+实际运用中，我们使用`const`引入模块，防止意外被更改：
+
+```javascript
+const path = require('path');
+let path = './some/path';
+```
+
+上述代码会报错，提醒我们意外更改了模块。
+
+如果需要创建不可变对象，只是简单的使用`const`是不够的，需要使用`Object.freeze()`或[deep-freeze](https://github.com/substack/deep-freeze)
+
+我看了一下源码，其实很少，就是递归使用`Object.freeze()`
+
+```javascript
+module.exports = function deepFreeze (o) {
+  Object.freeze(o);
+
+  Object.getOwnPropertyNames(o).forEach(function (prop) {
+    if (o.hasOwnProperty(prop)
+    && o[prop] !== null
+    && (typeof o[prop] === "object" || typeof o[prop] === "function")
+    && !Object.isFrozen(o[prop])) {
+      deepFreeze(o[prop]);
+    }
+  });
+  
+  return o;
+};
+```
+
+### 箭头函数
+箭头函数更易于理解，特别是在我们定义回调的时候：
+```javascript
+const numbers = [2, 6, 7, 8, 1];
+const even = numbers.filter(function(x) {
+  return x % 2 === 0;
+});
+```
+
+使用箭头函数语法，更简洁：
+
+```javascript
+const numbers = [2, 6, 7, 8, 1];
+const even = numbers.filter(x => x % 2 === 0);
+```
+
+如果不止一个`return`语句则使用`=> {}`
+
+```javascript
+const numbers = [2, 6, 7, 8, 1];
+const even = numbers.filter((x) => {
+  if (x % 2 === 0) {
+    console.log(x + ' is even');
+    return true;
+  }
+});
+```
+
+最重要是，箭头函数绑定了它的词法作用域，其`this`与父级代码块的`this`相同。
+
+```javascript
+function DelayedGreeter(name) {
+  this.name = name;
+}
+
+DelayedGreeter.prototype.greet = function() {
+  setTimeout(function cb() {
+    console.log('Hello' + this.name);
+  }, 500);
+}
+
+const greeter = new DelayedGreeter('World');
+greeter.greet(); // 'Hello'
+```
+
+要解决这个问题，使用箭头函数或`bind`
+
+```javascript
+function DelayedGreeter(name) {
+  this.name = name;
+}
+
+DelayedGreeter.prototype.greet = function() {
+  setTimeout(function cb() {
+    console.log('Hello' + this.name);
+  }.bind(this), 500);
+}
+
+const greeter = new DelayedGreeter('World');
+greeter.greet(); // 'HelloWorld'
+```
+
+或者箭头函数，与父级代码块作用域相同：
+
+```javascript
+function DelayedGreeter(name) {
+  this.name = name;
+}
+
+DelayedGreeter.prototype.greet = function() {
+  setTimeout(() => console.log('Hello' + this.name), 500);
+}
+
+const greeter = new DelayedGreeter('World');
+greeter.greet(); // 'HelloWorld'
+```
+
+### 类语法糖
+
+`class`是原型继承的语法糖，对于来自传统的面向对象语言的所有开发人员（如`Java`和`C#`）来说更熟悉，新语法并没有改变`JavaScript`的运行特征，通过原型来完成更加方便和易读。
+
+传统的通过`构造器 + 原型`的写法：
+
+```javascript
+function Person(name, surname, age) {
+  this.name = name;
+  this.surname = surname;
+  this.age = age;
+}
+
+Person.prototype.getFullName = function() {
+  return this.name + '' + this.surname;
+}
+
+Person.older = function(person1, person2) {
+  return (person1.age >= person2.age) ? person1 : person2;
+}
+```
+
+使用`class`语法显得更加简洁、方便、易懂：
+
+```javascript
+class Person {
+  constructor(name, surname, age) {
+    this.name = name;
+    this.surname = surname;
+    this.age = age;
+  }
+
+  getFullName() {
+    return this.name + '' + this.surname;
+  }
+
+  static older(person1, person2) {
+    return (person1.age >= person2.age) ? person1 : person2;
+  }
+}
+```
+
+但是上面的实现是可以互换的，但是，对于`class`语法来说，最有意义的是`extends`和`super`关键字。
+
+```javascript
+class PersonWithMiddlename extends Person {
+  constructor(name, middlename, surname, age) {
+    super(name, surname, age);
+    this.middlename = middlename;
+  }
+
+  getFullName() {
+    return this.name + '' + this.middlename + '' + this.surname;
+  }
+}
+```
+
+这个例子是真正的面向对象的方式，我们声明了一个希望被继承的类，定义新的构造器，并可以使用`super`关键字调用父构造器，并重写`getFullName`方法，使得其支持`middlename`。
+
+### 对象字面量的新语法
+#### 允许缺省值：
+
+```javascript
+const x = 22;
+const y = 17;
+const obj = { x, y };
+```
+
+#### 允许省略方法名
+
+```javascript
+module.exports = {
+  square(x) {
+    return x * x;
+  },
+  cube(x) {
+    return x * x * x;
+  },
+};
+```
+
+#### key的计算属性
+
+```javascript
+const namespace = '-webkit-';
+const style = {
+  [namespace + 'box-sizing']: 'border-box',
+  [namespace + 'box-shadow']: '10px 10px 5px #888',
+};
+```
+
+#### 新的定义getter和setter方式
+
+```javascript
+const person = {
+  name: 'George',
+  surname: 'Boole',
+
+  get fullname() {
+    return this.name + ' ' + this.surname;
+  },
+
+  set fullname(fullname) {
+    let parts = fullname.split(' ');
+    this.name = parts[0];
+    this.surname = parts[1];
+  }
+};
+
+console.log(person.fullname); // "George Boole"
+console.log(person.fullname = 'Alan Turing'); // "Alan Turing"
+console.log(person.name); // "Alan"
+```
+
+这里，第二个`console.log`触发了`set`方法。
+
+### Map、Set、WeakMap和WeakSet
+（这一部分在看《深入理解ES6》相关部分，下周补充更详细的笔记）
+
+### 模板字符串
+
+### 其它ES2015语法
+* [函数默认参数](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Functions/Default_parameters)
+* [剩余参数语法](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Functions/Rest_parameters)
+* [拓展运算符](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Operators/Spread_operator)
+* [解构赋值](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Operators/Destructuring_assignment)
+* [new.target](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Operators/new.target)
+* [代理](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/Proxy)
+* [反射](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/Reflect)
+* [Symbol](https://developer.mozilla.org/zh-CN/docs/Glossary/Symbol)
+
 ## Reactor模式
 `Reactor模式`是`Node.js`异步编程的核心模块，其核心概念是：`单线程`、`非阻塞I/O`，通过下列例子可以看到`Reactor模式`在`Node.js`平台的体现。
 
@@ -51,3 +391,26 @@ while(!resources.isEmpty()) {
 ```
 
 我们可以看到，通过这个简单的技术，已经可以在一个线程中处理不同的资源了，但依然不是高效的。事实上，在前面的例子中，用于迭代资源的循环只会消耗宝贵的`CPU`，而这些资源的浪费比起`阻塞I/O`反而更不可接受，轮询算法通常浪费大量`CPU`时间。
+
+### 事件机制
+对于获取非阻塞的资源而言，`忙-等模型`不是一个理想的技术。但是幸运的是，大多数现代的操作系统提供了一个原生的机制来处理并发，非阻塞资源是一个有效的方法。这种机制被称作事件循环机制，这种事件收集和`I/O队列`源于`发布-订阅模式`。看下面这个伪代码：
+
+```javascript
+socketA, pipeB;
+wachedList.add(socketA, FOR_READ);
+wachedList.add(pipeB, FOR_READ);
+while(events = demultiplexer.watch(wachedList)) {
+  // 事件循环
+  foreach(event in events) {
+    // 这里并不会阻塞，并且总会有返回值（不管是不是确切的值）
+    data = event.resource.read();
+    if (data === RESOURCE_CLOSED) {
+      // 资源已经被释放，从观察者队列移除
+      demultiplexer.unwatch(event.resource);
+    } else {
+      // 成功拿到资源，放入缓冲池
+      consumeData(data);
+    }
+  }
+}
+```
