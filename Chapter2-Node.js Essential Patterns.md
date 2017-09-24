@@ -234,3 +234,124 @@ function consistentReadAsync(filename, callback) {
 
 现在，上述函数保证在任何情况下异步地调用其回调函数，解决了上述`bug`。
 
+另一个用于延迟执行代码的`API`是`setImmediate()`。虽然它们的作用看起来非常相似，但实际含义却截然不同。`process.nextTick()`的回调函数会在任何其他`I/O`操作之前调用，而对于`setImmediate()`则会在其它`I/O`操作之后调用。由于`process.nextTick()`在其它的`I/O`之前调用，因此在某些情况下可能会导致`I/O`进入无限期等待，例如递归调用`process.nextTick()`但是对于`setImmediate()`则不会发生这种情况。当我们在本书后面分析使用延迟调用来运行同步`CPU`绑定任务时，我们将深入了解这两种API之间的区别。
+
+
+我们保证通过使用`process.nextTick()`异步调用其回调函数。
+
+### Node.js回调风格
+对于`Node.js`而言，`CPS`风格的`API`和回调函数遵循一组特殊的约定。这些约定不只是适用于`Node.js`核心`API`，对于它们之后也是绝大多数用户级模块和应用程序也很有意义。因此，我们了解这些风格，并确保我们在需要设计异步`API`时遵守规定显得至关重要。
+
+#### 回调总是最后一个参数
+在所有核心`Node.js`方法中，标准约定是当函数在输入中接受回调时，必须作为最后一个参数传递。我们以下面的`Node.js`核心`API`为例：
+
+```javascript
+fs.readFile(filename, [options], callback);
+```
+
+从前面的例子可以看出，即使是在可选参数存在的情况下，回调也始终置于最后的位置。其原因是在回调定义的情况下，函数调用更可读。
+
+#### 错误处理总在最前
+在`CPS`中，错误以不同于正确结果的形式在回调函数中传递。在`Node.js`中，`CPS`风格的回调函数产生的任何错误总是作为回调的第一个参数传递，并且任何实际的结果从第二个参数开始传递。如果操作成功，没有错误，第一个参数将为`null`或`undefined`。看下列代码：
+
+```javascript
+fs.readFile('foo.txt', 'utf8', (err, data) => {
+  if (err)
+    handleError(err);
+  else
+    processData(data);
+});
+```
+
+上面的例子是最好的检测错误的方法，如果不检测错误，我们可能难以发现和调试代码中的`bug`，但另外一个要考虑的问题是错误总是为`Error`类型，这意味着简单的字符串或数字不应该作为错误对象传递（难以被`try catch`代码块捕获）。
+
+#### 错误传播
+对于同步阻塞的写法而言，我们的错误都是通过`throw`语句抛出，即使错误在错误栈中跳转，我们也能很好地捕获到错误上下文。
+
+但是对于`CPS`风格的异步调用而言，通过把错误传递到错误栈中的下一个回调来完成，下面是一个典型的例子：
+
+```javascript
+const fs = require('fs');
+
+function readJSON(filename, callback) {
+  fs.readFile(filename, 'utf8', (err, data) => {
+    let parsed;
+    if (err)
+    // 如果有错误产生则退出当前调用
+      return callback(err);
+    try {
+      // 解析文件中的数据
+      parsed = JSON.parse(data);
+    } catch (err) {
+      // 捕获解析中的错误，如果有错误产生，则进行错误处理
+      return callback(err);
+    }
+    // 没有错误，调用回调
+    callback(null, parsed);
+  });
+};
+```
+
+从上面的例子中我们注意到的细节是当我们想要正确地进行异常处理时，我们如何向`callback`传递参数。此外，当有错误产生时，我们使用了`return`语句，立即退出当前函数调用，避免进行下面的相关执行。
+
+#### 不可捕获的异常
+从上述`readJSON()`函数，为了避免将任何异常抛到`fs.readFile()`的回调函数中捕获，我们对`JSON.parse()`周围放置一个`try catch`代码块。在异步回调中一旦出错，将抛出异常，并跳转到事件循环，不把错误传播到下一个回调函数去。
+
+在`Node.js`中，这是一个不可恢复的状态，应用程序会关闭，并将错误打印到标准输出中。为了证明这一点，我们尝试从之前定义的`readJSON()`函数中删除`try catch`代码块：
+
+```javascript
+const fs = require('fs');
+
+function readJSONThrows(filename, callback) {
+  fs.readFile(filename, 'utf8', (err, data) => {
+    if (err) {
+      return callback(err);
+    }
+    // 假设parse的执行没有错误
+    callback(null, JSON.parse(data));
+  });
+};
+```
+
+在上面的代码中，我们没有办法捕获到`JSON.parse`产生的异常，如果我们尝试传递一个非标准`JSON`格式的文件，将会抛出以下错误：
+
+![](http://oczira72b.bkt.clouddn.com/17-9-24/69634492.jpg)
+
+```
+SyntaxError: Unexpected token d
+at Object.parse (native)
+at [...]
+at fs.js:266:14
+at Object.oncomplete (fs.js:107:15)
+```
+
+现在，如果我们看看前面的错误栈跟踪，我们将看到它从`fs`模块的某处开始，恰好从本地`API`完成文件读取返回到`fs.readFile()`函数，通过事件循环。这些信息都很清楚地显示给我们，异常从我们的回调传入堆栈，然后直接进入事件循环，最终被捕获并抛出到控制台中。
+这也意味着使用`try catch`代码块包装对`readJSONThrows()`的调用将不起作用，因为块所在的堆栈与调用回调的堆栈不同。以下代码显示了我们刚才描述的相反的情况：
+
+```javascript
+try {
+  readJSONThrows('nonJSON.txt', function(err, result) {
+    // ... 
+  });
+} catch (err) {
+  console.log('This will not catch the JSON parsing exception');
+}
+```
+
+前面的`catch`语句将永远不会收到`JSON`解析异常，因为它将返回到抛出异常的堆栈。我们刚刚看到堆栈在事件循环中结束，而不是触发异步操作的功能。
+如前所述，应用程序在异常到达事件循环的那一刻中止，然而，我们仍然有机会在应用程序终止之前执行一些清理或日志记录。事实上，当这种情况发生时，`Node.js`会在退出进程之前发出一个名为`uncaughtException`的特殊事件。以下代码显示了一个示例用例：
+
+```javascript
+
+process.on('uncaughtException', (err) => {
+  console.error('This will catch at last the ' +
+    'JSON parsing exception: ' + err.message);
+  // Terminates the application with 1 (error) as exit code:
+  // without the following line, the application would continue
+  process.exit(1);
+});
+```
+
+![](http://oczira72b.bkt.clouddn.com/17-9-24/37979265.jpg)
+
+重要的是，未被捕获的异常会使应用程序处于不能保证一致的状态，这可能导致不可预见的问题。例如，可能还有不完整的`I/O`请求运行或关闭可能会变得不一致。这就是为什么总是建议，特别是在生产环境中，在接收到未被捕获的异常之后写上述代码进行错误日志记录。
