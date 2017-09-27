@@ -355,3 +355,160 @@ process.on('uncaughtException', (err) => {
 ![](http://oczira72b.bkt.clouddn.com/17-9-24/37979265.jpg)
 
 重要的是，未被捕获的异常会使应用程序处于不能保证一致的状态，这可能导致不可预见的问题。例如，可能还有不完整的`I/O`请求运行或关闭可能会变得不一致。这就是为什么总是建议，特别是在生产环境中，在接收到未被捕获的异常之后写上述代码进行错误日志记录。
+
+## 模块系统及相关模式
+模块不仅是构建大型应用的基础，其主要机制是封装内部实现、方法与变量，通过接口。在本节中，我们将介绍`Node.js`的模块系统及其最常见的使用模式。
+### 关于模块
+`JavaScript`的主要问题之一是没有命名空间。在全局范围内运行的程序会污染全局命名空间，造成相关变量、数据、方法名的冲突。解决这个问题的技术称为模块模式，看下列代码：
+
+```javascript
+const module = (() => {
+  const privateFoo = () => {
+    // ...
+  };
+  const privateBar = [];
+  const exported = {
+    publicFoo: () => {
+      // ...
+    },
+    publicBar: () => {
+      // ...
+    }
+  };
+  return exported;
+})();
+console.log(module);
+```
+
+此模式利用自执行匿名函数实现模块，仅导出旨希望被公开调用的部分。在上面的代码中，模块变量只包含导出的`API`，而其余的模块内容实际上从外部访问不到。我们将在稍后看到，这种模式背后的想法被用作`Node.js`模块系统的基础。
+
+### Node.js模块相关解释
+`CommonJS`是一个旨在规范`JavaScript`生态系统的组织，他们提出了`CommonJS模块规范`。 `Node.js`在此规范之上构建了其模块系统，并添加了一些自定义的扩展。为了描述它的工作原理，我们可以通过这样一个例子解释模块模式，每个模块都在私有命名空间下运行，这样模块内定义的每个变量都不会污染全局命名空间。
+
+#### 自定义模块系统
+为了解释模块系统的远离，让我们从头开始构建一个类似的模块系统。下面的代码创建一个模仿`Node.js`原始`require()`函数的功能。
+
+我们先创建一个加载模块内容的函数，将其包装到一个私有的命名空间内：
+
+```javascript
+function loadModule(filename, module, require) {
+  const wrappedSrc = `(function(module, exports, require) {
+         ${fs.readFileSync(filename, 'utf8')}
+       })(module, module.exports, require);`;
+  eval(wrappedSrc);
+}
+```
+
+模块的源代码被包装到一个函数中，如同自执行匿名函数那样。这里的区别在于，我们将一些固有的变量传递给模块，特指`module`，`exports`和`require`。注意导出模块的参数是`module.exports`和`exports`，后面我们将再讨论。
+
+请记住，这只是一个例子，在真实项目中可不要这么做。诸如`eval()`或[vm模块](http://nodejs.org/api/vm.html)有可能导致一些安全性的问题，它人可能利用漏洞来进行注入攻击。我们应该非常小心地使用甚至完全避免使用`eval`。
+
+我们现在来看模块的接口、变量等是如何被`require()`函数引入的：
+
+```javascript
+const require = (moduleName) => {
+  console.log(`Require invoked for module: ${moduleName}`);
+  const id = require.resolve(moduleName);
+  // 是否命中缓存
+  if (require.cache[id]) {
+    return require.cache[id].exports;
+  }
+  // 定义module
+  const module = {
+    exports: {},
+    id: id
+  };
+  // 新模块引入，存入缓存
+  require.cache[id] = module;
+  // 加载模块
+  loadModule(id, module, require);
+  // 返回导出的变量
+  return module.exports;
+};
+require.cache = {};
+require.resolve = (moduleName) => {
+  /* 通过模块名作为参数resolve一个完整的模块 */
+};
+```
+
+上面的函数模拟了用于加载模块的原生`Node.js`的`require()`函数的行为。当然，这只是一个`demo`，它并不能准确且完整地反映`require()`函数的真实行为，但是为了更好地理解`Node.js`模块系统的内部实现，定义模块和加载模块。我们的自制模块系统的功能如下：
+
+
+* 模块名称被作为参数传入，我们首先做的是找寻模块的完整路径，我们称之为`id`。`require.resolve()`专门负责这项功能，它通过一个特定的解析算法实现相关功能（稍后将讨论）。
+* 如果模块已经被加载，它应该存在于缓存。在这种情况下，我们立即返回缓存中的模块。
+* 如果模块尚未加载，我们将首次加载该模块。创建一个模块对象，其中包含一个使用空对象字面值初始化的`exports`属性。该属性将被模块的代码用于导出该模块的公共`API`。
+* 缓存首次加载的模块对象。
+* 模块源代码从其文件中读取，代码被导入，如前所述。我们通过`require()`函数向模块提供我们刚刚创建的模块对象。该模块通过操作或替换`module.exports`对象来导出其公共API。
+* 最后，将代表模块的公共`API`的`module.exports`的内容返回给调用者。
+
+正如我们所看到的，`Node.js`模块系统的原理并不是想象中那么高深，只不过是通过我们一系列操作来创建和导入导出模块源代码。
+
+#### 定义一个模块
+通过查看我们的自定义`require()`函数的工作原理，我们现在既然已经知道如何定义一个模块。再来看下面这个例子：
+
+```javascript
+// 加载另一个模块
+const dependency = require('./anotherModule');
+// 模块内的私有函数
+function log() {
+  console.log(`Well done ${dependency.username}`);
+}
+// 通过导出API实现共有方法
+module.exports.run = () => {
+  log();
+};
+```
+
+
+需要注意的是模块内的所有内容都是私有的，除非它被分配给`module.exports`变量。然后，当使用`require()`加载模块时，缓存并返回此变量的内容。
+
+#### 定义全局变量
+即使在模块中声明的所有变量和函数都在其本地范围内定义，仍然可以定义全局变量。事实上，模块系统公开了一个名为`global`的特殊变量。分配给此变量的所有内容将会被定义到全局环境下。
+
+注意：污染全局命名空间是不好的，并且没有充分运用模块系统的优势。所以，只有真的需要使用全局变量，才去使用它。
+
+#### module.exports和exports
+对于许多还不熟悉`Node.js`的开发人员而言，他们最容易混淆的是`exports`和`module.exports`来导出公共`API`的区别。变量`export`只是对`module.exports`的初始值的引用;我们已经看到，`exports`本质上在模块加载之前只是一个简单的对象。
+
+这意味着我们只能将新属性附加到导出变量引用的对象，如以下代码所示：
+
+```javascript
+exports.hello = () => {
+  console.log('Hello');
+}
+```
+
+重新给`exports`赋值并不会有任何影响，因为它并不会因此而改变`module.exports`的内容，它只是改变了该变量本身。因此下列代码是错误的：
+
+```javascript
+exports = () => {
+  console.log('Hello');
+}
+```
+
+如果我们想要导出除对象之外的内容，比如函数，我们可以给`module.exports`重新赋值：
+
+```javascript
+module.exports = () => {
+  console.log('Hello');
+}
+```
+
+#### require函数是同步的
+另一个重要的细节是上述我们写的`require()`函数是同步的，它使用了一个较为简单的方式返回了模块内容，并且不需要回调函数。因此，对于`module.exports`也是同步的，例如，下列的代码是不正确的：
+
+```javascript
+setTimeout(() => {
+  module.exports = function() {
+    // ...
+  };
+}, 100);
+```
+
+通过这种方式导出模块会对我们定义模块产生重要的影响，因为它限制了我们同步定义并使用模块的方式。这实际上是为什么核心`Node.js`库提供同步`API`以代替异步`API`的最重要的原因之一。
+
+如果我们需要定义一个需要异步操作来进行初始化的模块，我们也可以随时定义和导出需要我们异步初始化的模块。但是这样定义异步模块我们并不能保证`require()`后可以立即使用，在第九章，我们将详细分析这个问题，并提出一些模式来优化解决这个问题。
+
+实际上，在早期的`Node.js`中，曾经有一个异步版本的`require()`，但由于它对初始化时间和异步`I/O`的性能有巨大影响，很快这个`API`就被删除了。
+
+#### resolve算法
