@@ -512,3 +512,325 @@ setTimeout(() => {
 实际上，在早期的`Node.js`中，曾经有一个异步版本的`require()`，但由于它对初始化时间和异步`I/O`的性能有巨大影响，很快这个`API`就被删除了。
 
 #### resolve算法
+`依赖地狱`描述了软件的依赖于不同版本的软件包的依赖关系，`Node.js`通过加载不同版本的模块来解决这个问题，具体取决于模块的加载位置。而都是由`npm`来完成的，相关算法被称作`resolve算法`，被用到`require()`函数中。
+
+
+现在让我们快速概述一下这个算法。如下所述，`resolve()`函数将一个模块名称（`moduleName`）作为输入，并返回模块的完整路径。然后，该路径用于加载其代码，并且还可以唯一地标识模块。`resolve算法`可以分为以下三种规则：
+
+* 文件模块：如果`moduleName`以`/`开头，那么它已经被认为是模块的绝对路径。如果以`./`开头，那么`moduleName`被认为是相对路径，它是从使用`require`的模块的位置开始计算的。
+* 核心模块：如果`moduleName`不以`/`或`./`开头，则算法将首先尝试在核心Node.js模块中进行搜索。
+* 模块包：如果没有找到匹配`moduleName`的核心模块，则搜索在当前目录下的`node_modules`，如果没有搜索到`node_modules`，则会往上层目录继续搜索`node_modules`，直到它到达文件系统的根目录。
+
+对于文件和包模块，单个文件和目录也可以匹配到`moduleName`。特别地，算法将尝试匹配以下内容：
+* `<moduleName>.js`
+* `<moduleName>/index.js`
+* 在`<moduleName>/package.json`的`main`值下声明的文件或目录
+
+[resolve算法的具体文档](https://nodejs.org/api/modules.html#modules_all_together)
+
+`node_modules`目录实际上是`npm`安装每个包并存放相关依赖关系的地方。这意味着，基于我们刚刚描述的算法，每个包都有自身的私有依赖关系。例如，看以下目录结构：
+
+```
+
+myApp
+├── foo.js
+└── node_modules
+    ├── depA
+    │   └── index.js
+    └── depB
+        │
+        ├── bar.js
+        ├── node_modules
+        ├── depA
+        │    └── index.js
+        └── depC
+             ├── foobar.js
+             └── node_modules
+                 └── depA
+                     └── index.js
+```
+
+
+在前面的例子中，`myApp`，`depB`和`depC`都依赖于`depA`;然而，他们都有自己的私有依赖的版本！按照解析算法的规则，使用`require('depA')`将根据需要的模块加载不同的文件，如下：
+
+* 在`/myApp/foo.js`中调用的`require('depA')`会加载`/myApp/node_modules/depA/index.js`
+* 在`/myApp/node_modules/depB/bar.js`中调用的`require('depA')`会加载`/myApp/node_modules/depB/node_modules/depA/index.js`
+* 在`/myApp/node_modules/depC/foobar.js`中调用的`require('depA')`会加载`/myApp/node_modules/depC/node_modules/depA/index.js`
+
+`resolve算法`是`Node.js`依赖关系管理的核心部分，它的存在使得即便应用程序拥有成百上千包的情况下也不会出现冲突和版本不兼容的问题。
+
+当我们调用`require()`时，解析算法对我们是透明的。然而，仍然可以通过调用`require.resolve()`直接由任何模块使用。
+
+#### 模块缓存
+每个模块只会在它第一次引入的时候加载，此后的任意一次`require()`调用均从之前缓存的版本中取得。通过查看我们之前写的自定义的`require()`函数，可以看到缓存对于性能提升至关重要，此外也具有一些其它的优势，如下：
+
+* 使得模块依赖关系的重复利用成为可能
+* 从某种程度上保证了在从给定的包中要求相同的模块时总是返回相同的实例，避免了冲突
+
+模块缓存通过`require.cache`变量查看，因此如果需要，可以直接访问它。在实际运用中的例子是通过删除`require.cache`变量中的相对键来使某个缓存的模块无效，这是在测试过程中非常有用，但在正常情况下会十分危险。
+
+#### 循环依赖
+许多人认为循环依赖是`Node.js`内在的设计问题，但在真实项目中真的可能发生，所以我们至少知道如何在`Node.js`中使得循环依赖有效。再来看我们自定义的`require()`函数，我们可以立即看到其工作原理和注意事项。
+
+看下面这两个模块：
+
+* 模块`a.js`
+
+```javascript
+exports.loaded = false;
+const b = require('./b');
+module.exports = {
+  bWasLoaded: b.loaded,
+  loaded: true
+};
+```
+
+* 模块`b.js`
+
+```javascript
+exports.loaded = false;
+const a = require('./a');
+module.exports = {
+  aWasLoaded: a.loaded,
+  loaded: true
+};
+```
+
+然后我们在`main.js`中写以下代码：
+
+```javascript
+const a = require('./a');
+const b = require('./b');
+console.log(a);
+console.log(b);
+```
+
+执行上述代码，会打印以下结果：
+
+```javascript
+{
+  bWasLoaded: true,
+  loaded: true
+}
+{
+  aWasLoaded: false,
+  loaded: true
+}
+```
+
+![](http://oczira72b.bkt.clouddn.com/17-9-28/51159001.jpg)
+
+这个结果展现了循环依赖的处理顺序。虽然`a.js`和`b.js`这两个模块都在主模块需要的时候完全初始化，但是当从`b.js`加载时，`a.js`模块是不完整的。特别，这种状态会持续到`b.js`加载完毕的那一刻。这种情况我们应该引起注意，特别要确认我们在`main.js`中两个模块所需的顺序。
+
+这是由于模块`a.js`将收到一个不完整的版本的`b.js`。我们现在明白，如果我们失去了首先加载哪个模块的控制，如果项目足够大，这可能会很容易发生循环依赖。
+
+[关于循环引用的文档](https://nodejs.org/api/modules.html#modules_cycles)
+
+简单说就是，为了防止模块载入的死循环，`Node.js`在模块第一次载入后会把它的结果进行缓存，下一次再对它进行载入的时候会直接从缓存中取出结果。所以在这种循环依赖情形下，不会有死循环，但是却会因为缓存造成模块没有按照我们预想的那样被导出（`export`，详细的案例分析见下文）。
+
+官网给出了三个模块还不是循环依赖最简单的情形。实际上，两个模块就可以很清楚的表达出这种情况。根据递归的思想，解决了最简单的情形，这一类任意大小规模的问题也就解决了一半（另一半还需要探明随着问题规模增长，问题的解将会如何变化）。
+
+`JavaScript`作为一门解释型的语言，上面的打印输出清晰的展示出了程序运行的轨迹。在这个例子中，`a.js`首先`require`了`b.js`, 程序进入`b.js`，在`b.js`中第一行又`require`了`a.js`。
+
+如前文所述，为了避免无限循环的模块依赖，在`Node.js`运行`a.js` 之后，它就被缓存了，但需要注意的是，此时缓存的仅仅是一个未完工的`a.js`（**an unfinished copy of the a.js**）。所以在 `b.js`中`require`了`a.js`时，得到的仅仅是缓存中一个未完工的`a.js`，具体来说，它并没有明确被导出的具体内容（`a.js`尾端）。所以`b.js`中输出的`a`是一个空对象。
+
+之后，`b.js`顺利执行完，回到`a.js`的`require`语句之后，继续执行完成。
+
+### 模块定义模式
+模块系统除了自带处理依赖关系的机制之外，最常见的功能就是定义`API`。对于定义`API`，主要需要考虑私有和公共功能之间的平衡。其目的是最大化信息隐藏内部实现和暴露的`API`可用性，同时将这些与可扩展性和代码重用性进行平衡。
+
+在本节中，我们将分析一些在`Node.js`中定义模块的最流行模式;每个模块都保证了私有变量的透明，可扩展性和代码重用。
+
+#### 命名导出
+暴露公共`API`的最基本方法是使用命名导出，其中包括将我们想要公开的所有值分配给由`export`（或`module.exports`）引用的对象的属性。以这种方式，生成的导出对象将成为一组相关功能的容器或命名空间。
+
+看下面代码，是此模式的实现：
+
+```javascript
+//file logger.js
+exports.info = (message) => {
+  console.log('info: ' + message);
+};
+exports.verbose = (message) => {
+  console.log('verbose: ' + message);
+};
+```
+
+导出的函数随后作为引入其的模块的属性使用，如下面的代码所示：
+
+```javascript
+// file main.js
+const logger = require('./logger');
+logger.info('This is an informational message');
+logger.verbose('This is a verbose message');
+```
+
+大多数`Node.js`模块使用这种定义。
+
+
+`CommonJS`规范仅允许使用`exports`变量来公开`public`成员。因此，命名的导出模式是唯一与`CommonJS`规范兼容的模式。使用`module.exports`是`Node.js`提供的一个扩展，以支持更广泛的模块定义模式。
+
+#### 函数导出
+最流行的模块定义模式之一包括将整个`module.exports`变量重新分配给一个函数。它的主要优点是它只暴露了一个函数，为模块提供了一个明确的入口点，使其更易于理解和使用，它也很好地展现了单一职责原则。这种定义模块的方法在社区中也被称为`substack模式`，在以下示例中查看此模式：
+
+```javascript
+// file logger.js
+module.exports = (message) => {
+  console.log(`info: ${message}`);
+};
+```
+
+该模式也可以将导出的函数用作其他公共`API`的命名空间。这是一个非常强大的组合，因为它仍然给模块一个单独的入口点（`exports`的主函数）。这种方法还允许我们公开具有次要或更高级用例的其他函数。以下代码显示了如何使用导出的函数作为命名空间来扩展我们之前定义的模块：
+
+```javascript
+module.exports.verbose = (message) => {
+  console.log(`verbose: ${message}`);
+};
+```
+
+这段代码演示了如何调用我们刚才定义的模块：
+
+```javascript
+// file main.js
+const logger = require('./logger');
+logger('This is an informational message');
+logger.verbose('This is a verbose message');
+```
+
+虽然只是导出一个函数也可能是一个限制，但实际上它是一个完美的方式，把重点放在一个单一的函数，它代表着这个模块最重要的一个功能，同时使得内部私有变量属性更加透明，而只是暴露导出函数本身的属性。
+
+`Node.js`的模块化鼓励我们遵循采用单一职责原则（`SRP`）：每个模块应该对单个功能负责，该职责应完全由该模块封装，以保证复用性。
+
+注意，这里讲的`substack模式`，就是通过仅导出一个函数来暴露模块的主要功能。使用导出的函数作为命名空间来导出别的次要功能。
+
+#### 构造器(类)导出
+导出构造函数的模块是导出函数的模块的特例。其不同之处在于，使用这种新模式，我们允许用户使用构造函数创建新的实例，但是我们也可以扩展其原型并创建新类（继承）。以下是此模式的示例：
+
+```javascript
+// file logger.js
+function Logger(name) {
+  this.name = name;
+}
+Logger.prototype.log = function(message) {
+  console.log(`[${this.name}] ${message}`);
+};
+Logger.prototype.info = function(message) {
+  this.log(`info: ${message}`);
+};
+Logger.prototype.verbose = function(message) {
+  this.log(`verbose: ${message}`);
+};
+module.exports = Logger;
+```
+
+我们通过以下方式使用上述模块：
+
+```javascript
+// file main.js
+const Logger = require('./logger');
+const dbLogger = new Logger('DB');
+dbLogger.info('This is an informational message');
+const accessLogger = new Logger('ACCESS');
+accessLogger.verbose('This is a verbose message');
+```
+
+通过`ES2015`的`class`关键字语法也可以实现相同的模式：
+
+```javascript
+class Logger {
+  constructor(name) {
+    this.name = name;
+  }
+  log(message) {
+    console.log(`[${this.name}] ${message}`);
+  }
+  info(message) {
+    this.log(`info: ${message}`);
+  }
+  verbose(message) {
+    this.log(`verbose: ${message}`);
+  }
+}
+module.exports = Logger;
+```
+
+鉴于`ES2015`的类只是原型的语法糖，该模块的使用将与其基于原型和构造函数的方案完全相同。
+
+
+导出构造函数或类仍然是模块的单个入口点，但与`substack模式`比起来，它暴露了更多的模块内部结构。然而，另一方面，当想要扩展该模块功能时，我们可以更加方便。
+
+这种模式的变种包括对不使用`new`的调用。这个小技巧让我们将我们的模块用作工厂。看下列代码：
+
+```javascript
+function Logger(name) {
+  if (!(this instanceof Logger)) {
+    return new Logger(name);
+  }
+  this.name = name;
+};
+```
+
+其实这很简单：我们检查`this`是否存在，并且是`Logger`的一个实例。如果这些条件中的任何一个都为`false`，则意味着`Logger()`函数在不使用`new`的情况下被调用，然后继续正确创建新实例并将其返回给调用者。这种技术允许我们将模块也用作工厂：
+
+```javascript
+// file logger.js
+const Logger = require('./logger');
+const dbLogger = Logger('DB');
+accessLogger.verbose('This is a verbose message');
+```
+
+`ES2015`的`new.target`语法从`Node.js 6`开始提供了一个更简洁的实现上述功能的方法。该利用公开了`new.target`属性，该属性是所有函数中可用的`元属性`，如果使用`new`关键字调用函数，则在运行时计算结果为`true`。
+我们可以使用这种语法重写工厂：
+
+```javascript
+function Logger(name) {
+  if (!new.target) {
+    return new LoggerConstructor(name);
+  }
+  this.name = name;
+}
+```
+
+这个代码完全与前一段代码作用相同，所以我们可以说`ES2015`的`new.target`语法糖使得代码更加可读和自然。
+
+#### 实例导出
+我们可以利用`require()`的缓存机制来轻松地定义具有从构造函数或工厂创建的状态的有状态实例，可以在不同模块之间共享。以下代码显示了此模式的示例：
+
+```javascript
+//file logger.js
+function Logger(name) {
+  this.count = 0;
+  this.name = name;
+}
+Logger.prototype.log = function(message) {
+  this.count++;
+  console.log('[' + this.name + '] ' + message);
+};
+module.exports = new Logger('DEFAULT');
+```
+
+这个新定义的模块可以这么使用：
+
+```javascript
+// file main.js
+const logger = require('./logger');
+logger.log('This is an informational message');
+```
+
+因为模块被缓存，所以每个需要`Logger`模块的模块实际上总是会检索该对象的相同实例，从而共享它的状态。这种模式非常像创建单例。然而，它并不保证整个应用程序的实例的唯一性，因为它发生在传统的单例模式中。在分析解析算法时，实际上已经看到，一个模块可能会多次安装在应用程序的依赖关系树中。这导致了同一逻辑模块的多个实例，所有这些实例都运行在同一个`Node.js`应用程序的上下文中。在第7章中，我们将分析导出有状态的实例和一些可替代的模式。
+
+我们刚刚描述的模式的扩展包括`exports`用于创建实例的构造函数以及实例本身。这允许用户创建相同对象的新实例，或者如果需要也可以扩展它们。为了实现这一点，我们只需要为实例分配一个新的属性，如下面的代码所示：
+
+```javascript
+module.exports.Logger = Logger;
+```
+
+然后，我们可以使用导出的构造函数创建类的其他实例：
+
+```javascript
+const customLogger = new logger.Logger('CUSTOM');
+customLogger.log('This is an informational message');
+```
+
+从代码可用性的角度来看，这类似于将导出的函数用作命名空间，该模块导出一个对象的默认实例，这是我们大部分时间使用的功能，而更多的高级功能（如创建新实例或扩展对象的功能）仍然可以通过较少的暴露属性来使用。
+
