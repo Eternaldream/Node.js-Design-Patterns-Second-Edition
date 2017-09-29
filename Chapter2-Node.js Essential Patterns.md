@@ -834,3 +834,226 @@ customLogger.log('This is an informational message');
 
 从代码可用性的角度来看，这类似于将导出的函数用作命名空间，该模块导出一个对象的默认实例，这是我们大部分时间使用的功能，而更多的高级功能（如创建新实例或扩展对象的功能）仍然可以通过较少的暴露属性来使用。
 
+#### 修改其他模块或全局作用域
+
+一个模块甚至可以导出任何东西这可以看起来有点不合适;但是，我们不应该忘记一个模块可以修改全局范围和其中的任何对象，包括缓存中的其他模块。请注意，这些通常被认为是不好的做法，但是由于这种模式在某些情况下（例如测试）可能是有用和安全的，有时确实可以利用这一特性，这是值得了解和理解的。我们说一个模块可以修改全局范围内的其他模块或对象。它通常是指在运行时修改现有对象以更改或扩展其行为或应用的临时更改。
+
+以下示例显示了我们如何向另一个模块添加新函数：
+
+```javascript
+// file patcher.js
+// ./logger is another module
+require('./logger').customMessage = () => console.log('This is a new functionality');
+```
+
+编写以下代码：
+
+```javascript
+// file main.js
+require('./patcher');
+const logger = require('./logger');
+logger.customMessage();
+```
+
+在上述代码中，必须首先引入`patcher`程序才能使用`logger`模块。
+
+上面的写法是很危险的。主要考虑的是拥有修改全局命名空间或其他模块的模块是具有副作用的操作。换句话说，它会影响其范围之外的实体的状态，这可能导致不可预测的后果，特别是当多个模块与相同的实体进行交互时。想象一下，有两个不同的模块尝试设置相同的全局变量，或者修改同一个模块的相同属性，效果可能是不可预测的（哪个模块胜出？），但最重要的是它会对在整个应用程序产生影响。
+
+## 观察者模式
+`Node.js`中的另一个重要和基本的模式是观察者模式。与`reactor模式`，回调模式和模块一样，观察者模式是`Node.js`基础之一，也是使用许多`Node.js`核心模块和用户定义模块的基础。
+
+观察者模式是对`Node.js`的数据响应的理想解决方案，也是对回调的完美补充。我们给出以下定义：
+
+发布者定义一个对象，它可以在其状态发生变化时通知一组观察者（或监听者）。
+
+与回调模式的主要区别在于，主体实际上可以通知多个观察者，而传统的`CPS`风格的回调通常主体的结果只会传播给一个监听器。
+
+### EventEmitter类
+在传统的面向对象编程中，观察者模式需要接口，具体类和层次结构。在`Node.js`中，都变得简单得多。观察者模式已经内置在核心模块中，可以通过`EventEmitter`类来实现。 `EventEmitter`类允许我们注册一个或多个函数作为监听器，当特定的事件类型被触发时，它的回调将被调用，以通知其监听器。以下图像直观地解释了这个概念：
+
+![](http://oczira72b.bkt.clouddn.com/17-9-28/75441136.jpg)
+
+`EventEmitter`是一个类（原型），它是从事件核心模块导出的。以下代码显示了如何获得对它的引用：
+
+```javascript
+const EventEmitter = require('events').EventEmitter;
+const eeInstance = new EventEmitter();
+```
+
+`EventEmitter`的基本方法如下：
+* `on(event，listener)`：此方法允许您为给定的事件类型（`String类型`）注册一个新的侦听器（一个函数）
+* `once(event, listener)`：此方法注册一个新的监听器，然后在事件首次发布之后被删除
+* `emit(event, [arg1], [...])`：此方法会生成一个新事件，并提供其他参数以传递给侦听器
+* `removeListener(event, listener)`：此方法将删除指定事件类型的侦听器
+
+所有上述方法将返回`EventEmitter`实例以允许链接。监听器函数`function([arg1], [...])`，所以它只是接受事件发出时提供的参数。在侦听器中，这是指`EventEmitter`生成事件的实例。
+我们可以看到，一个监听器和一个传统的`Node.js`回调有很大的区别;特别地，第一个参数不是`error`，它是在调用时传递给`emit()`的任何数据。
+
+### 创建和使用EventEmitter
+我们来看看我们如何在实践中使用`EventEmitter`。最简单的方法是创建一个新的实例并立即使用它。以下代码显示了在文件列表中找到匹配特定正则的文件内容时，使用`EventEmitter`实现实时通知订阅者的功能：
+
+```javascript
+const EventEmitter = require('events').EventEmitter;
+const fs = require('fs');
+
+function findPattern(files, regex) {
+  const emitter = new EventEmitter();
+  files.forEach(function(file) {
+    fs.readFile(file, 'utf8', (err, content) => {
+      if (err)
+        return emitter.emit('error', err);
+      emitter.emit('fileread', file);
+      let match;
+      if (match = content.match(regex))
+        match.forEach(elem => emitter.emit('found', file, elem));
+    });
+  });
+  return emitter;
+}
+```
+
+由前面的函数`EventEmitter`处理将产生的三个事件：
+
+* `fileread`事件：当文件被读取时触发
+* `found`事件：当文件内容被正则匹配成功时触发
+* `error`事件：当读取文件出现错误时触发
+
+下面看`findPattern()`函数是如何被触发的：
+
+```javascript
+findPattern(['fileA.txt', 'fileB.json'], /hello \w+/g)
+  .on('fileread', file => console.log(file + ' was read'))
+  .on('found', (file, match) => console.log('Matched "' + match + '" in file ' + file))
+  .on('error', err => console.log('Error emitted: ' + err.message));
+```
+
+
+在前面的例子中，我们为`EventParttern()`函数创建的`EventEmitter`生成的每个事件类型注册了一个监听器。
+
+### 错误传播
+
+如果事件是异步发送的，`EventEmitter`不能在异常情况发生时抛出异常，异常会在事件循环中丢失。相反，而是`emit`是发出一个称为错误的特殊事件，`Error对象`通过参数传递。这正是我们在之前定义的`findPattern()`函数中正在做的。
+
+对于错误事件，始终是最佳做法注册侦听器，因为`Node.js`会以特殊的方式处理它，并且如果没有找到相关联的侦听器，将自动抛出异常并退出程序。
+
+### 让任意对象可观察
+有时，直接通过`EventEmitter`类创建一个新的可观察的对象是不够的，因为原生`EventEmitter`类并没有提供我们实际运用场景的拓展功能。我们可以通过扩展`EventEmitter`类使一个通用对象可观察。
+
+为了演示这个模式，我们试着在对象中实现`findPattern()`函数的功能，如下代码所示：
+
+```javascript
+const EventEmitter = require('events').EventEmitter;
+const fs = require('fs');
+class FindPattern extends EventEmitter {
+  constructor(regex) {
+    super();
+    this.regex = regex;
+    this.files = [];
+  }
+  addFile(file) {
+    this.files.push(file);
+    return this;
+  }
+  find() {
+    this.files.forEach(file => {
+      fs.readFile(file, 'utf8', (err, content) => {
+        if (err) {
+          return this.emit('error', err);
+        }
+        this.emit('fileread', file);
+        let match = null;
+        if (match = content.match(this.regex)) {
+          match.forEach(elem => this.emit('found', file, elem));
+        }
+      });
+    });
+    return this;
+  }
+}
+```
+
+我们定义的`FindPattern`类中运用了核心模块`util`提供的`inherits()`函数来扩展`EventEmitter`。以这种方式，它成为一个符合我们实际运用场景的可观察类。以下是其用法的示例：
+
+```javascript
+const findPatternObject = new FindPattern(/hello \w+/);
+findPatternObject
+  .addFile('fileA.txt')
+  .addFile('fileB.json')
+  .find()
+  .on('found', (file, match) => console.log(`Matched "${match}"
+       in file ${file}`))
+  .on('error', err => console.log(`Error emitted ${err.message}`));
+```
+
+现在，通过继承`EventEmitter`的功能，我们现在可以看到`FindPattern`对象除了可观察外，还有一整套方法。
+这在`Node.js`生态系统中是一个很常见的模式，例如，核心`HTTP`模块的`Server`对象定义了`listen()`，`close()`，`setTimeout()`等方法，并且在内部它也继承自`EventEmitter`函数，从而允许它在收到新的请求、建立新的连接或者服务器关闭响应请求相关的事件。
+
+扩展`EventEmitter`的对象的其他示例是`Node.js`流。我们将在第五章中更详细地分析`Node.js`的流。
+
+### 同步和异步事件
+与回调模式类似，事件也支持同步或异步发送。至关重要的是，我们决不应当在同一个`EventEmitter`中混合使用两种方法，但是在发布相同的事件类型时考虑同步或者异步显得至关重要，以避免产生因同步与异步顺序不一致导致的`zalgo`。
+
+发布同步和异步事件的主要区别在于观察者注册的方式。当事件异步发布时，即使在`EventEmitter`初始化之后，程序也会注册新的观察者，因为必须保证此事件在事件循环下一周期之前不被触发。正如上边的`findPattern()`函数中的情况。它代表了大多数`Node.js`异步模块中使用的常用方法。
+
+相反，同步发布事件要求在`EventEmitter`函数开始发出任何事件之前就得注册好观察者。看下面的例子：
+
+```javascript
+const EventEmitter = require('events').EventEmitter;
+class SyncEmit extends EventEmitter {
+  constructor() {
+    super();
+    this.emit('ready');
+  }
+}
+const syncEmit = new SyncEmit();
+syncEmit.on('ready', () => console.log('Object is ready to be  used'));
+```
+
+如果`ready`事件是异步发布的，那么上述代码将会正常运行，然而，由于事件是同步发布的，并且监听器在发送事件之后才被注册，所以结果不调用监听器，该代码将无法打印到控制台。
+
+由于不同的应用场景，有时以同步方式使用`EventEmitter`函数是有意义的。因此，要清楚地突出我们的`EventEmitter`的同步和异步性，以避免产生不必要的错误和异常。
+
+### 事件机制与回调机制的比较
+在定义异步`API`时，常见的难点是检查是否使用`EventEmitter`的事件机制或仅接受回调函数。一般区分规则是这样的：当一个结果必须以异步方式返回时，应该使用回调函数，当需要结果不确定其方式时，应该使用事件机制来响应。
+
+但是，由于这两者实在太相近，并且可能两种方式都能实现相同的应用场景，所以产生了许多混乱。以下列代码为例：
+
+```javascript
+function helloEvents() {
+  const eventEmitter = new EventEmitter();
+  setTimeout(() => eventEmitter.emit('hello', 'hello world'), 100);
+  return eventEmitter;
+}
+
+function helloCallback(callback) {
+  setTimeout(() => callback('hello world'), 100);
+}
+```
+
+`helloEvents()`和`helloCallback()`在其功能上可以被认为是等价的，第一个使用事件机制实现，第二个则使用回调来通知调用者，而将事件作为参数传递。但是真正区分它们的是可执行性，语义和要实现或使用的代码量。虽然我们不能给出一套确定性的规则来选择一种风格，但我们当然可以提供一些提示来帮助你做出决定。
+
+相比于第一个例子，即观察者模式而言，回调函数在支持不同类型的事件时有一些限制。但是事实上，我们仍然可以通过将事件类型作为回调的参数传递，或者通过接受多个回调来区分多个事件。然而，这样做的话不能被认为是一个优雅的`API`。在这种情况下，`EventEmitter`可以提供更好的接口和更精简的代码。
+
+`EventEmitter`更优秀的另一种应用场景是多次触发同一事件或不触发事件的情况。事实上，无论操作是否成功，一个回调预计都只会被调用一次。但有一种特殊情况是，我们可能不知道事件在哪个时间点触发，在这种情况下，`EventEmitter`是首选。
+
+最后，使用回调的`API`仅通知特定的回调，但是使用`EventEmitter`函数可以让多个监听器都接收到通知。
+
+### 回调机制和事件机制结合使用
+还有一些情况可以将事件机制和回调结合使用。特别是当我们导出异步函数时，这种模式非常有用。[node-glob模块](https://npmjs.org/package/glob)是该模块的一个示例。
+
+```javascript
+glob(pattern, [options], callback)
+```
+
+该函数将一个文件名匹配模式作为第一个参数，后面两个参数分别为一组选项和一个回调函数，对于匹配到指定文件名匹配模式的文件列表，相关回调函数会被调用。同时，该函数返回`EventEmitter`，它展现了当前进程的状态。例如，当成功匹配文件名时可以实时发布`match`事件，当文件列表全部匹配完毕时可以实时发布`end`事件，或者该进程被手动中止时发布`abort`事件。看以下代码：
+
+```javascript
+const glob = require('glob');
+glob('data/*.txt', (error, files) => console.log(`All files found: ${JSON.stringify(files)}`))
+  .on('match', match => console.log(`Match found: ${match}`));
+```
+
+## 总结
+在本章中，我们首先了解了同步和异步的区别。然后，我们探讨了如何使用回调机制和回调机制来处理一些基本的异步方案。我们还了解到两种模式之间的主要区别，何时比另一种模式更适合解决具体问题。我们只是迈向更先进的异步模式的第一步。
+
+在下一章中，我们将介绍更复杂的场景，了解如何利用回调机制和事件机制来处理高级异步控制问题。
