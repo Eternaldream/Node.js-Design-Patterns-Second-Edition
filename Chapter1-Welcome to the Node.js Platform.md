@@ -323,9 +323,6 @@ console.log(person.name); // "Alan"
 
 这里，第二个`console.log`触发了`set`方法。
 
-### Map、Set、WeakMap和WeakSet
-（这一部分在看《深入理解ES6》相关部分，下周补充更详细的笔记）
-
 ### 模板字符串
 
 ### 其它ES2015语法
