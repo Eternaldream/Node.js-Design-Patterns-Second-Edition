@@ -364,3 +364,67 @@ function spiderLinks(currentUrl, body, nesting) {
 > Promises / A +规范规定，then()方法的onFulfilled()和onRejected()回调函数只能调用一次（仅调用onFulfilled()和onRejected()）。Promise接口的实现确保即使我们多次手动调用resolve或reject，Promise也仅可以被resolve或reject一次。
 
 现在，使用`Promise`的`Web爬虫应用程序`的第4版应该已经准备好了。我们可能再次注意到下载任务如何并行运行，并发数量限制为2。
+
+### 在公有API中暴露回调函数和Promise
+正如我们在前面所学到的，`Promise`可以被用作回调函数的一个很好的替代品。它们使我们的代码更具可读性和易于理解。虽然`Promise`带来了许多优点，但也要求开发人员理解许多不易于理解的概念，以便正确和熟练地使用。由于这个原因和其他原因，在某些情况下，比起`Promise`来说，很多开发者更偏向于回调函数。
+
+现在让我们想象一下，我们想要构建一个执行异步操作的公共库。我们需要做什么？我们是创建了一个基于回调函数的`API`还是一个面向`Promise`的`API`？还是两者均有？
+
+这是许多知名的库所面临的问题，至少有两种方法值得一提，使我们能够提供一个多功能的`API`。
+
+像`request`，`redis`和`mysql`这样的库所使用的第一种方法是提供一个简单的基于回调函数的`API`，如果需要，开发人员可以选择公开函数。其中一些库提供工具函数来`Promise`化异步回调，但开发人员仍然需要以某种方式将暴露的`API`转换为能够使用`Promise`对象。
+
+第二种方法更透明。它还提供了一个面向回调的`API`，但它使回调参数可选。每当回调作为参数传递时，函数将正常运行，在完成时或失败时执行回调。当回调未被传递时，函数将立即返回一个`Promise`对象。这种方法有效地结合了回调函数和`Promise`，使得开发者可以在调用时选择采用什么接口，而不需要提前进行`Promise`化。许多库，如`mongoose`和`sequelize`，都支持这种方法。
+
+我们来看一个简单的例子。假设我们要实现一个异步执行除法的模块：
+
+```javascript
+module.exports = function asyncDivision(dividend, divisor, cb) {
+  return new Promise((resolve, reject) => { // [1]
+    process.nextTick(() => {
+      const result = dividend / divisor;
+      if (isNaN(result) || !Number.isFinite(result)) {
+        const error = new Error('Invalid operands');
+        if (cb) {
+          cb(error); // [2]
+        }
+        return reject(error);
+      }
+      if (cb) {
+        cb(null, result); // [3]
+      }
+      resolve(result);
+    });
+  });
+};
+```
+
+该模块的代码非常简单，但是有一些值得强调的细节：
+
+* 首先，返回使用`Promise`的构造函数创建的新承诺。我们在构造函数参数函数内定义全部逻辑。
+* 在发生错误的情况下，我们`reject`这个`Promise`，但如果回调函数在被调用时作为参数传递，我们也执行回调来进行错误传播。
+* 在计算结果之后，我们`resolve`了这个`Promise`，但是如果有回调函数，我们也会将结果传播给回调函数。
+
+我们现在看如何用回调函数和`Promise`来使用这个模块：
+
+```javascript
+// 回调函数的方式
+asyncDivision(10, 2, (error, result) => {
+  if (error) {
+    return console.error(error);
+  }
+  console.log(result);
+});
+
+// Promise化的调用方式
+asyncDivision(22, 11)
+  .then(result => console.log(result))
+  .catch(error => console.error(error));
+```
+
+应该很清楚的是，即将开始使用类似于上述的新模块的开发人员将很容易地选择最适合自己需求的风格，而无需在希望利用`Promise`时引入外部`promisification`功能。
+
+## Generators
+`ES2015`规范引入了另外一种机制，除了其他新功能外，还可以用来简化`Node.js`应用程序的异步控制流程。我们正在谈论`Generator`，也被称为`semi-coroutines`。它们是子程序的一般化，可以有不同的入口点。在一个正常的函数中，实际上我们只能有一个入口点，这个入口点对应着函数本身的调用。`Generator`与一般函数类似，但是可以暂停（使用`yield`语句），然后在稍后继续执行。在实现迭代器时，`Generator`特别有用，因为我们已经讨论了如何使用迭代器来实现重要的异步控制流模式，如顺序执行和限制并行执行。
+
+### Generators基础
