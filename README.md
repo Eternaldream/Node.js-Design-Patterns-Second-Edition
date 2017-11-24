@@ -33,5 +33,4 @@
 })();
 ```
 
-![](http://oczira72b.bkt.clouddn.com/17-11-24/26658936.jpg)
-![](http://oczira72b.bkt.clouddn.com/17-11-24/43363420.jpg)
+<img src="http://oczira72b.bkt.clouddn.com/17-11-24/26658936.jpg" style="width: 300px; height: 300px;"><img src="http://oczira72b.bkt.clouddn.com/17-11-24/43363420.jpg" style="width: 300px; height: 300px;">
